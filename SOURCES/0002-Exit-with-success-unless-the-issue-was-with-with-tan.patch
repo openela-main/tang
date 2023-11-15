@@ -1,0 +1,38 @@
+From ea43ca02cf52d0455c6949683692a95e38ccdf70 Mon Sep 17 00:00:00 2001
+From: Sergio Correia <scorreia@redhat.com>
+Date: Fri, 4 Dec 2020 09:05:19 -0300
+Subject: [PATCH 2/2] Exit with success unless the issue was with with tangd
+ itself
+
+When an HTTP parser error happens, tangd is currently exiting with an
+error status, which may cause trouble in some scenarios [1].
+
+However, we don't exit with an error in situations where we try requests
+that do not exist, for instance. It makes sense to only exit with an
+error when the error was with tangd itself, e.g.: when we are unable to
+read the directory with the keys, not when the actual HTTP operation
+does not succeed for some reason.
+
+Upstream: https://github.com/latchset/tang/pull/55
+
+[1] https://bugzilla.redhat.com/show_bug.cgi?id=1828558
+---
+ src/tangd.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/tangd.c b/src/tangd.c
+index b569f38..d40201f 100644
+--- a/src/tangd.c
++++ b/src/tangd.c
+@@ -225,7 +225,7 @@ main(int argc, char *argv[])
+         if (parser.http_errno != 0) {
+             fprintf(stderr, "HTTP Parsing Error: %s\n",
+                     http_errno_description(parser.http_errno));
+-            return EXIT_FAILURE;
++            return EXIT_SUCCESS;
+         }
+ 
+         memmove(req, &req[r], rcvd - r);
+-- 
+2.27.0
+
