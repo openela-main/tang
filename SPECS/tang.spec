@@ -1,5 +1,5 @@
 Name:           tang
-Version:        11
+Version:        14
 Release:        2%{?dist}
 Summary:        Network Presence Binding Daemon
 
@@ -29,6 +29,7 @@ BuildRequires:  coreutils
 BuildRequires:  grep
 BuildRequires:  socat
 BuildRequires:  sed
+BuildRequires:  iproute
 
 %{?systemd_requires}
 Requires:       coreutils
@@ -51,7 +52,7 @@ Tang is a small daemon for binding data to the presence of a third party.
 %install
 %meson_install
 install -p -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/tang.conf
-echo "User=%{name}" >> $RPM_BUILD_ROOT/%{_unitdir}/%{name}d@.service
+grep "User=%{name}" $RPM_BUILD_ROOT/%{_unitdir}/%{name}d@.service || echo "User=%{name}" >> $RPM_BUILD_ROOT/%{_unitdir}/%{name}d@.service
 %{__mkdir_p} $RPM_BUILD_ROOT/%{_localstatedir}/db/%{name}
 
 %check
@@ -99,6 +100,14 @@ fi
 %{_sysusersdir}/tang.conf
 
 %changelog
+* Thu Jun 29 2023 Sergio Arroutbi <sarroutb@redhat.com> - 14-2
+- Fix service start up
+
+* Tue Jun 27 2023 Sergio Arroutbi <sarroutb@redhat.com> - 14-1
+- New upstream release - v14.
+  Resolves: rhbz#2182411
+  Resolves: CVE-2023-1672
+
 * Wed Aug 17 2022 Sergio Arroutbi <sarroutb@redhat.com> - 11-2
 - Adopt systemd-sysusers format
   Resolves: rhbz#2095474
