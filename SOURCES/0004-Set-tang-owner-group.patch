@@ -1,0 +1,26 @@
+--- tang-7.ori/src/tangd-keygen	2023-07-21 11:45:39.091100369 +0200
++++ tang-7/src/tangd-keygen	2023-07-21 11:47:58.813612221 +0200
+@@ -20,6 +20,13 @@
+ 
+ trap 'exit' ERR
+ 
++set_perms() {
++    chmod -- 0440 "${1}"
++    if ! chown -- "tang:tang" "${1}" 2>/dev/null; then
++        echo "Unable to change owner/group for ${1} to tang:tang" >&2
++    fi
++}
++
+ if [ $# -ne 1 -a $# -ne 3 ] || [ ! -d "$1" ]; then
+     echo "Usage: $0 <jwkdir> [<sig> <exc>]" >&2
+     exit 1
+@@ -32,7 +39,9 @@
+ jwe=`jose jwk gen -i '{"alg":"ES512"}'`
+ [ -z "$sig" ] && sig=`echo "$jwe" | jose jwk thp -i-`
+ echo "$jwe" > $1/$sig.jwk
++set_perms "$1/$sig.jwk"
+ 
+ jwe=`jose jwk gen -i '{"alg":"ECMR"}'`
+ [ -z "$exc" ] && exc=`echo "$jwe" | jose jwk thp -i-`
+ echo "$jwe" > $1/$exc.jwk
++set_perms "$1/$exc.jwk"

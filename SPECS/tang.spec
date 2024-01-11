@@ -1,6 +1,6 @@
 Name:           tang
 Version:        7
-Release:        6%{?dist}
+Release:        8%{?dist}
 Summary:        Network Presence Binding Daemon
 
 License:        GPLv3+
@@ -8,6 +8,8 @@ URL:            https://github.com/latchset/%{name}
 Source0:        https://github.com/latchset/%{name}/releases/download/v%{version}/%{name}-%{version}.tar.bz2
 Patch1: 0001-Move-key-generation-to-tang.patch
 Patch2: 0002-Exit-with-success-unless-the-issue-was-with-with-tan.patch
+Patch3: 0003-Fix-permissions-race-condition.patch
+Patch4: 0004-Set-tang-owner-group.patch
 
 BuildRequires:  gcc
 BuildRequires:  autoconf
@@ -89,6 +91,15 @@ exit 0
 %{_mandir}/man1/tang-show-keys.1*
 
 %changelog
+* Fri Jul 21 2023 Sergio Arroutbi <sarroutb@redhat.com> - 7-8
+- Set correct user/group (tang/tang) in tangd-keygen
+  Resolves: rhbz#2188743
+
+* Wed Jun 28 2023 Sergio Arroutbi <sarroutb@redhat.com> - 7-7
+- Fix race condition when creating/rotating keys
+  Resolves: rhbz#2182410
+  Resolves: CVE-2023-1672
+
 * Wed Jan 13 2021 Sergio Correia <scorreia@redhat.com> - 7-6
 - Exit with success unless the issue was with with tangd itself
   Resolves: rhbz#1828558
