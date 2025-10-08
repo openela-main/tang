@@ -1,0 +1,238 @@
+From 6aebfd5499039b58b88eb15eba1aa719c117cfd4 Mon Sep 17 00:00:00 2001
+From: Sergio Correia <scorreia@redhat.com>
+Date: Tue, 9 Jan 2024 08:56:59 +0000
+Subject: [PATCH] Add support for building with llhttp instead of http-parser
+
+As http-parser has been unmaintained for a while [1], let's add
+support for its natural replacement, llhttp.
+
+However, as llhttp does not seem to be packaged in distros like
+Debian [2], we will keep supporting building with http-parser for
+time being, preferring llhttp, if it is present.
+
+[1] https://github.com/nodejs/http-parser/issues/522
+[2] https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=977716
+---
+ .github/workflows/install-dependencies |  2 +-
+ meson.build                            | 17 ++++++++++---
+ src/http.c                             | 10 ++++----
+ src/http.h                             | 35 +++++++++++++++++++++++---
+ src/tangd.c                            | 16 ++++++------
+ 5 files changed, 58 insertions(+), 22 deletions(-)
+
+diff --git a/.github/workflows/install-dependencies b/.github/workflows/install-dependencies
+index 96852a8..a9bbab0 100755
+--- a/.github/workflows/install-dependencies
++++ b/.github/workflows/install-dependencies
+@@ -13,7 +13,7 @@ debian:*|ubuntu:*)
+     echo 'max_parallel_downloads=10' >> /etc/dnf/dnf.conf
+     dnf -y clean all
+     dnf -y --setopt=deltarpm=0 update
+-    dnf -y install gcc meson pkgconfig libjose-devel jose http-parser-devel \
++    dnf -y install gcc meson pkgconfig libjose-devel jose llhttp-devel \
+                    systemd gcovr curl socat iproute
+     ;;
+ 
+diff --git a/meson.build b/meson.build
+index fd46cef..33c8aff 100644
+--- a/meson.build
++++ b/meson.build
+@@ -55,13 +55,22 @@ add_project_arguments('-DVERSION="'+meson.project_version() + '"', language : 'c
+ jose = dependency('jose', version: '>=8')
+ a2x = find_program('a2x', required: false)
+ compiler = meson.get_compiler('c')
+-if not compiler.has_header('http_parser.h',args : '-I/usr/local/include')
+-  error('http-parser devel files not found.')
++
++http_lib = []
++if compiler.has_header('llhttp.h', args: '-I/usr/local/include')
++  http_lib = 'llhttp'
++  add_project_arguments('-DUSE_LLHTTP', language: 'c')
++else
++  if not compiler.has_header('http_parser.h', args: '-I/usr/local/include')
++    error('neither llhttp nor http-parser devel files found.')
++  endif
++  http_lib = 'http_parser'
+ endif
++
+ if host_machine.system() == 'freebsd'
+-  http_parser = compiler.find_library('http_parser',dirs : '/usr/local/lib')
++  http_parser = compiler.find_library(http_lib, dirs : '/usr/local/lib')
+ else
+-  http_parser = compiler.find_library('http_parser')
++  http_parser = compiler.find_library(http_lib)
+ endif
+ 
+ licenses = ['COPYING']
+diff --git a/src/http.c b/src/http.c
+index e9af37b..17b613f 100644
+--- a/src/http.c
++++ b/src/http.c
+@@ -36,7 +36,7 @@ HTTP_METHOD_MAP(XX)
+ };
+ 
+ static int
+-on_url(http_parser *parser, const char *at, size_t length)
++on_url(http_parser_t *parser, const char *at, size_t length)
+ {
+     struct http_state *state = parser->data;
+ 
+@@ -51,7 +51,7 @@ on_url(http_parser *parser, const char *at, size_t length)
+ }
+ 
+ static int
+-on_body(http_parser *parser, const char *at, size_t length)
++on_body(http_parser_t *parser, const char *at, size_t length)
+ {
+     struct http_state *state = parser->data;
+ 
+@@ -66,7 +66,7 @@ on_body(http_parser *parser, const char *at, size_t length)
+ }
+ 
+ static int
+-on_message_complete(http_parser *parser)
++on_message_complete(http_parser_t *parser)
+ {
+     struct http_state *state = parser->data;
+     const char *addr = NULL;
+@@ -132,7 +132,7 @@ egress:
+     return 0;
+ }
+ 
+-const http_parser_settings http_settings = {
++const http_settings_t http_settings = {
+     .on_url = on_url,
+     .on_body = on_body,
+     .on_message_complete = on_message_complete,
+@@ -140,7 +140,7 @@ const http_parser_settings http_settings = {
+ 
+ int
+ http_reply(const char *file, int line,
+-           enum http_status code, const char *fmt, ...)
++           http_status_t code, const char *fmt, ...)
+ {
+     const char *msg = NULL;
+     va_list ap;
+diff --git a/src/http.h b/src/http.h
+index 8660a4f..2e35686 100644
+--- a/src/http.h
++++ b/src/http.h
+@@ -19,12 +19,39 @@
+ 
+ #pragma once
+ 
+-#include <http_parser.h>
+ #include <sys/types.h>
+ #include <regex.h>
+ 
++#ifdef USE_LLHTTP
++#include <llhttp.h>
++
++typedef llhttp_method_t http_method_t;
++typedef llhttp_status_t http_status_t;
++typedef llhttp_settings_t http_settings_t;
++typedef llhttp_t http_parser_t;
++#define tang_http_parser_init(parser, settings) llhttp_init(parser, HTTP_REQUEST, settings)
++#define tang_http_parser_execute(parser, settings, req, rcvd) llhttp_execute(parser, req, rcvd)
++#define tang_http_parser_errno(parser) parser.error
++#define tang_http_errno_description(parser, errno) llhttp_get_error_reason(parser)
++
++#else
++/* Legacy http-parser. */
++#include <http_parser.h>
++
++typedef enum http_method http_method_t;
++typedef enum http_status http_status_t;
++typedef http_parser_settings http_settings_t;
++typedef struct http_parser http_parser_t;
++
++#define tang_http_parser_init(parser, settings) http_parser_init(parser, HTTP_REQUEST)
++#define tang_http_parser_execute(parser, settings, req, rcvd) http_parser_execute(parser, settings, req, rcvd)
++#define tang_http_parser_errno(parser) parser.http_errno
++#define tang_http_errno_description(parser, errno) http_errno_description(errno)
++
++#endif /* USE_LLHTTP */
++
+ struct http_dispatch {
+-    int (*func)(enum http_method method, const char *path,
++    int (*func)(http_method_t method, const char *path,
+                 const char *body, regmatch_t matches[], void *misc);
+     uint64_t methods;
+     size_t nmatches;
+@@ -43,11 +70,11 @@ struct http_state {
+     void *misc;
+ };
+ 
+-extern const http_parser_settings http_settings;
++extern const http_settings_t http_settings;
+ 
+ int __attribute__ ((format(printf, 4, 5)))
+ http_reply(const char *file, int line,
+-           enum http_status code, const char *fmt, ...);
++           http_status_t code, const char *fmt, ...);
+ 
+ #define http_reply(code, ...) \
+     http_reply(__FILE__, __LINE__, code, __VA_ARGS__)
+diff --git a/src/tangd.c b/src/tangd.c
+index 1e3a6a3..7f197f6 100644
+--- a/src/tangd.c
++++ b/src/tangd.c
+@@ -64,7 +64,7 @@ str_cleanup(char **str)
+ }
+ 
+ static int
+-adv(enum http_method method, const char *path, const char *body,
++adv(http_method_t method, const char *path, const char *body,
+     regmatch_t matches[], void *misc)
+ {
+     __attribute__((cleanup(str_cleanup))) char *adv = NULL;
+@@ -101,7 +101,7 @@ adv(enum http_method method, const char *path, const char *body,
+ }
+ 
+ static int
+-rec(enum http_method method, const char *path, const char *body,
++rec(http_method_t method, const char *path, const char *body,
+     regmatch_t matches[], void *misc)
+ {
+     __attribute__((cleanup(str_cleanup))) char *enc = NULL;
+@@ -197,13 +197,14 @@ static int
+ process_request(const char *jwkdir, int in_fileno)
+ {
+     struct http_state state = { .dispatch = dispatch, .misc = (char*)jwkdir };
+-    struct http_parser parser = { .data = &state };
++    http_parser_t parser;
+     struct stat st = {};
+     char req[4096] = {};
+     size_t rcvd = 0;
+     int r = 0;
+ 
+-    http_parser_init(&parser, HTTP_REQUEST);
++    tang_http_parser_init(&parser, &http_settings);
++    parser.data = &state;
+ 
+     if (stat(jwkdir, &st) != 0) {
+         fprintf(stderr, "Error calling stat() on path: %s: %m\n", jwkdir);
+@@ -224,17 +225,16 @@ process_request(const char *jwkdir, int in_fileno)
+ 
+         rcvd += r;
+ 
+-        r = http_parser_execute(&parser, &http_settings, req, rcvd);
+-        if (parser.http_errno != 0) {
++        r = tang_http_parser_execute(&parser, &http_settings, req, rcvd);
++        if (tang_http_parser_errno(parser) != 0) {
+             fprintf(stderr, "HTTP Parsing Error: %s\n",
+-                    http_errno_description(parser.http_errno));
++                    tang_http_errno_description(&parser, tang_http_parser_errno(parser)));
+             return EXIT_SUCCESS;
+         }
+ 
+         memmove(req, &req[r], rcvd - r);
+         rcvd -= r;
+     }
+-
+     return EXIT_SUCCESS;
+ }
+ 
+-- 
+2.41.0
+
